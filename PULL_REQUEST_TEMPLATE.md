@@ -1,3 +1,5 @@
+<!-- PR title: type(optional-scope): concise summary. Type: feat, fix, perf, refactor, docs, test, build, ci, chore, or revert. -->
+
 ## Summary
 
 <!-- What problem does this PR solve, and why now? -->
@@ -13,3 +15,7 @@
 ## Blockers / known issues
 
 <!-- Remaining risks, follow-up work, or "None". -->
+
+---
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
