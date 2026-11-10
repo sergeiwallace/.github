@@ -1,0 +1,97 @@
+name: Release
+
+# Reusable workflow. A repository calls it on a push to its default branch; when the version in
+# the repository's version file has no matching tag yet, it creates the tag and a GitHub Release
+# whose notes are that version's section of CHANGELOG.md. Nothing happens when the tag exists.
+# The standard, and a caller to copy, are in docs/release-standard.md.
+
+on:
+  workflow_call:
+    inputs:
+      version-file:
+        description: File holding the version (pyproject.toml, VERSION, or a JSON file such as plugin.json)
+        required: true
+        type: string
+      changelog:
+        description: Changelog file with a "## [X.Y.Z]" section per release
+        required: false
+        default: CHANGELOG.md
+        type: string
+      title:
+        description: Release title prefix, for example the project name
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Read the version
+        id: version
+        env:
+          VERSION_FILE: ${{ inputs.version-file }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re, sys, tomllib
+          path = os.environ["VERSION_FILE"]
+          text = open(path, encoding="utf-8").read()
+          if path.endswith(".toml"):
+              data = tomllib.loads(text)
+              version = (data.get("project") or {}).get("version") or data.get("version")
+          elif path.endswith(".json"):
+              version = json.loads(text).get("version")
+          else:
+              version = text.strip()
+          if not version or not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", version):
+              sys.exit(f"{path} does not hold a semantic version: {version!r}")
+          print(f"version={version}")
+          PY
+      - name: Skip when the release exists
+        id: exists
+        env:
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "${TAG} already exists; nothing to release"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Write the release notes
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          CHANGELOG: ${{ inputs.changelog }}
+        run: |
+          : > release_notes.md
+          if [ -f "$CHANGELOG" ]; then
+            awk -v v="$VERSION" '
+              $0 ~ "^## \\[" v "\\]" { found = 1; next }
+              /^## \[/ { if (found) exit }
+              found { print }
+            ' "$CHANGELOG" > release_notes.md
+          fi
+          if [ ! -s release_notes.md ]; then
+            echo "Release ${VERSION}" > release_notes.md
+          fi
+      - name: Create the tag and the GitHub Release
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TITLE: ${{ inputs.title }}
+        run: |
+          name="${TITLE:+${TITLE} }${VERSION}"
+          prerelease=""
+          case "$VERSION" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "v${VERSION}" --target "$GITHUB_SHA" --title "$name" \
+            --notes-file release_notes.md $prerelease
